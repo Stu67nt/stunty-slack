@@ -6,3 +6,4 @@ opencv-python
 python-dotenv
 edge-tts
 moviepy
+fpstimer
