@@ -12,25 +12,27 @@ import asyncio
 from moviepy import VideoFileClip, vfx, AudioFileClip
 import re
 import threading
+import fpstimer
 
 """
 To do: 
 - Some links make it so bot does not read whole thread. (Fix or reject these links)
 test case: "https://hackclub.slack.com/archives/C0AUZ1LAMH6/p1781975964576339?thread_ts=1781975935.775339&cid=C0AUZ1LAMH6"
-- Get out of opencv hell as it is slow as shit.
+- Get out of opencv hell as it is slow as shit. (Done but need to test on a server)
 - Add multiple voice support
 - Add channel bot features which only work in #stunts-sanctuary
 - Add subtitiles
 - Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads)
 - more cat photos
-- Fix frame timings for bad apple	
+- Fix frame timings for bad apple
+- fix channel id's not being read
 """
 
 ########################################################################################################################
 # Slack utils stuff
 ########################################################################################################################
 
-ASCII_COLOURMAP = numpy.frombuffer("@%#*+=-:. ".encode(), dtype=numpy.uint8)
+ASCII_COLOURMAP = numpy.frombuffer(" @%#*+=-:."[::-1].encode(), dtype=numpy.uint8)
 
 # Env shit
 load_dotenv()
@@ -67,6 +69,7 @@ def handle_mention(event, client, say):
 			text="Mention me inside of the thread you want to slopify"
 		)
 		return None
+	# Add other mention features here as necessary.
 
 	return None
 
@@ -94,31 +97,7 @@ def upload_video(client, user_id, file_path, thread_ts):
 	os.remove(file_path)
 
 
-@app.event("app_mention")
-def handle_slop_mention(event, client, say):
-	messages, thread_ts, user_id = handle_mention(event, client, say)
-	client.chat_postMessage(channel=user_id,
-							text="generating your video be patient as it can take a while")
-	text = ""
-	for message in messages:
-		p = r'https?://\S+|www\.\S+'
-		n_url = str(re.sub(p, "", message["text"]))
-		# Rewrite this
-		# Matches <@U12345678> or <@U12345678|username> safely
-		parts = re.split(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>", n_url)
-		for i in range(0, len(parts)):
-			# Force an exact match so no trailing text passes through
-			if parts[i] and re.fullmatch(r"U[A-Z0-9]+", parts[i]):
-				try:
-					user_info = client.users_info(user=parts[i])
-					parts[i] = user_info["user"]["profile"]["display_name"]
-				except Exception:
-					# Prevents a crash if a user left the workspace or an ID is invalid
-					parts[i] = f"[User {parts[i]}]"
-
-		msg = "".join(parts)
-		text += msg + ". "
-
+def process_script(text, thread_ts):
 	print("turning to audio")
 	name = f"{thread_ts}{random.randint(1000, 9999)}"
 	asyncio.run(speak(text, name))
@@ -138,32 +117,66 @@ def handle_slop_mention(event, client, say):
 	video_clip.audio = audio_clip.subclipped(0, video_clip.duration)
 	video_clip.write_videofile(f"{name}.mp4")
 	os.remove(f"{name}.mp3")
+	return name
 
+@app.event("app_mention")
+def handle_slop_mention(event, client, say):
+	messages, thread_ts, user_id = handle_mention(event, client, say)
+	client.chat_postMessage(channel=user_id,
+							text="generating your video be patient as it can take a while")
+	text = ""
+	# Rewrite ALL of this absolute slop regex
+	for message in messages:
+		p = r'https?://\S+|www\.\S+'
+		n_url = str(re.sub(p, "", message["text"]))
+		# Matches <@U12345678> or <@U12345678|username> safely
+		parts = re.split(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>", n_url)
+		for i in range(0, len(parts)):
+			# Force an exact match so no trailing text passes through
+			if parts[i] and re.fullmatch(r"U[A-Z0-9]+", parts[i]):
+				try:
+					user_info = client.users_info(user=parts[i])
+					parts[i] = user_info["user"]["profile"]["display_name"]
+				except Exception:
+					# Prevents a crash if a user left the workspace or an ID is invalid
+					parts[i] = f"[User {parts[i]}]"
+
+		msg = "".join(parts)
+		text += msg + ". "
+
+	name = process_script(text, thread_ts)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
+def determine_state(link_text):
+	return link_text.split("?")
 
 @app.command("/slopify")
 def handle_slop_command(ack, say, command):
 	print("Triggered")
 	ack()
-
 	client = app.client
 
-	# rewrite this
 	user_id = command["user_id"]
-	url = command.get("text", "")
+	url = command.get("text")
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
-	channel_match = re.search(r'/archives/(\w+)/', url)
-	channel_id = channel_match.group(1) if channel_match else None
 
-	# Extract Message TS
-	ts_match = re.search(r'/p(\d{16})', url)
-	if ts_match:
-		raw_ts = ts_match.group(1)
-		# Format: 1621234567.000123
-		thread_ts = f"{raw_ts[:-6]}.{raw_ts[-6:]}"
+	msg_info = determine_state(url)
+	if len(msg_info) == 2:
+		info_str = msg_info[1].split("&")
+		channel_id = info_str[1][4:]
+		thread_ts = info_str[0][10:]
+		print(channel_id, thread_ts)
 
+	elif len(msg_info) == 1:
+		info_str = msg_info[0].split("/")
+		channel_id = info_str[-2]
+		unfiltered_thread_ts = info_str[-1][1:]
+		thread_ts = f"{unfiltered_thread_ts[:-6]}.{unfiltered_thread_ts[-6:]}"
+
+	else:
+		channel_id = None
+		thread_ts = None
 	try:
 		result = client.conversations_replies(channel=channel_id, ts=thread_ts)
 		messages = result.get("messages", [])
@@ -192,25 +205,7 @@ def handle_slop_command(ack, say, command):
 		msg = "".join(parts)
 		text += msg + ". "
 
-	print("turning to audio")
-	name = f"{thread_ts}{random.randint(1000, 9999)}"
-	asyncio.run(speak(text, name))
-
-	print("turing to video")
-	audio_clip = AudioFileClip(f"{name}.mp3")
-
-	mypath = "slop_videos"
-	onlyfiles = [f for f in os.listdir(mypath) if os.path.isfile(os.path.join(mypath, f))]
-	file_i = random.randint(0, len(onlyfiles) - 1)
-
-	video_clip = (
-		VideoFileClip(f"{mypath}/{onlyfiles[file_i]}")
-		.with_volume_scaled(0)
-	).with_effects([vfx.Loop(duration=audio_clip.duration)])
-
-	video_clip.audio = audio_clip.subclipped(0, video_clip.duration)
-	video_clip.write_videofile(f"{name}.mp4")
-	os.remove(f"{name}.mp3")
+	name = process_script(text, thread_ts)
 
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
@@ -268,6 +263,7 @@ def handle_badapple_command(ack, say, command):
 	channel_id = print_frame["channel"]
 
 	vo = create_video_obj("BadApple.mp4", width, height)
+	timer = fpstimer.FPSTimer(1)
 
 	for frame_num in range(0, len(vo), 30):
 		frame_raw = frame_to_ascii(frame_to_gs(vo[frame_num].asnumpy()), ASCII_COLOURMAP)
@@ -280,7 +276,7 @@ def handle_badapple_command(ack, say, command):
 				ts=message_ts,
 				text=f"```{frame}```"
 			)
-		time.sleep(1)
+		timer.sleep()
 
 ########################################################################################################################
 # Cat generator
@@ -323,6 +319,7 @@ def handle_cat_gen_command(ack, say, command):
 	i = 0
 	length = 0
 	msg = ""
+	# Splits large messages into many small ones
 	try:
 		while i < len(img):
 			length += width
