@@ -9,22 +9,23 @@ import cv2 as cv
 from decord import VideoReader, cpu
 import edge_tts
 import asyncio
-from moviepy import VideoFileClip, vfx, AudioFileClip
+from moviepy import VideoFileClip, vfx, AudioFileClip, CompositeVideoClip, TextClip
+from moviepy.video.tools.subtitles import SubtitlesClip
+import moviepy
 import re
 import threading
 import fpstimer
 
 """
 To do: 
-- Some links make it so bot does not read whole thread. (Fix or reject these links)
-test case: "https://hackclub.slack.com/archives/C0AUZ1LAMH6/p1781975964576339?thread_ts=1781975935.775339&cid=C0AUZ1LAMH6"
+- Some links make it so bot does not read whole thread. (done)
 - Get out of opencv hell as it is slow as shit. (Done but need to test on a server)
+-	 Fix frame timings for bad apple (good enough)
 - Add multiple voice support
 - Add channel bot features which only work in #stunts-sanctuary
 - Add subtitiles
 - Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads)
 - more cat photos
-- Fix frame timings for bad apple
 - fix channel id's not being read
 """
 
@@ -76,9 +77,17 @@ def handle_mention(event, client, say):
 # REMINDER TO SELF: async lets other functions run whilst this is happening
 # So whilst file is being saved other actions can happen with await
 async def speak(text, name="output"):
-	communicate = edge_tts.Communicate(text)
-	await communicate.save(f"{name}.mp3")
+	communicate = edge_tts.Communicate(text, boundary="WordBoundary")
+	submaker = edge_tts.SubMaker()
+	with open(f"{name}.mp3", "wb") as file:
+		async for chunk in communicate.stream():
+			if chunk["type"] == "audio":
+				file.write(chunk["data"])
+			elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
+				submaker.feed(chunk)
 
+	with open(f"{name}.srt", "w", encoding="utf-8") as file:
+		file.write(submaker.get_srt())
 
 def upload_video(client, user_id, file_path, thread_ts):
 	dm = client.conversations_open(users=user_id)
@@ -90,7 +99,11 @@ def upload_video(client, user_id, file_path, thread_ts):
 			title=f"Slopified video {thread_ts}"
 		)
 	except Exception as e:
-		client.chat_postMessage(channel=user_id,
+		if e == "<urlopen error The write operation timed out>":
+			client.chat_postMessage(channel=user_id,
+									text=f"So the thread you wanted to slopify was too large to send over slack")
+		else:
+			client.chat_postMessage(channel=user_id,
 								text=f"I'm to lazy to create actual error messages so here is what slack said went wrong.\n"
 									 f"{e}")
 		return
@@ -115,8 +128,15 @@ def process_script(text, thread_ts):
 	).with_effects([vfx.Loop(duration=audio_clip.duration)])
 
 	video_clip.audio = audio_clip.subclipped(0, video_clip.duration)
+
+	generator = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='caption', size=(video_clip.w, int(video_clip.h/5)))
+	subtitles = SubtitlesClip(f'{name}.srt', make_textclip=generator)
+
+
+	video_clip = CompositeVideoClip((video_clip, subtitles))
 	video_clip.write_videofile(f"{name}.mp4")
 	os.remove(f"{name}.mp3")
+	os.remove(f"{name}.srt")
 	return name
 
 @app.event("app_mention")
