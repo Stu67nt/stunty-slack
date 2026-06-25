@@ -20,13 +20,13 @@ import fpstimer
 To do: 
 - Some links make it so bot does not read whole thread. (done)
 - Get out of opencv hell as it is slow as shit. (Done but need to test on a server)
--	 Fix frame timings for bad apple (good enough)
+- Fix frame timings for bad apple (good enough)
+- Add subtitiles (It does exist)
 - Add multiple voice support
 - Add channel bot features which only work in #stunts-sanctuary
-- Add subtitiles
-- Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads)
-- more cat photos
-- fix channel id's not being read
+- Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads) (cant find one)
+- more cat photos (done)
+- fix channel id's not being read (done)
 """
 
 ########################################################################################################################
@@ -38,13 +38,6 @@ ASCII_COLOURMAP = numpy.frombuffer(" @%#*+=-:."[::-1].encode(), dtype=numpy.uint
 # Env shit
 load_dotenv()
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-
-# Add back if necessary
-"""@app.event("message")
-def handle_message_events(ack):
-	# Simply acknowledge to stop the "unhandled request" warning
-	pass"""
-
 
 ########################################################################################################################
 # Slop generator
@@ -83,7 +76,7 @@ async def speak(text, name="output"):
 		async for chunk in communicate.stream():
 			if chunk["type"] == "audio":
 				file.write(chunk["data"])
-			elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
+			elif chunk["type"] == "WordBoundary":
 				submaker.feed(chunk)
 
 	with open(f"{name}.srt", "w", encoding="utf-8") as file:
@@ -101,7 +94,8 @@ def upload_video(client, user_id, file_path, thread_ts):
 	except Exception as e:
 		if e == "<urlopen error The write operation timed out>":
 			client.chat_postMessage(channel=user_id,
-									text=f"So the thread you wanted to slopify was too large to send over slack")
+									text=f"So the thread you wanted to slopify was too large to send over slack.\n"
+										 f"So ummm... have fun?")
 		else:
 			client.chat_postMessage(channel=user_id,
 								text=f"I'm to lazy to create actual error messages so here is what slack said went wrong.\n"
@@ -109,6 +103,49 @@ def upload_video(client, user_id, file_path, thread_ts):
 		return
 	os.remove(file_path)
 
+def filter_script(client, messages):
+	text = ""
+	channel_cache = {}
+
+	for message in messages:
+		p = r'https?://\S+|www\.\S+'
+		n_url = str(re.sub(p, "", message["text"]))
+		parts = re.split(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>|<#(C[A-Z0-9]+)?>",n_url)
+		# 3 groups per match: [text, user_id, chan_id]
+		rebuilt = []
+		for i in range(0, len(parts), 3):
+			text_chunk = parts[i]
+			if i + 1 < len(parts) :
+				user_id = parts[i + 1]
+			else:
+				user_id = None
+			if i + 2 < len(parts):
+				chan_id = parts[i + 2]
+			else:
+				chan_id = None
+
+			if text_chunk:
+				rebuilt.append(text_chunk)
+
+			if user_id:
+				try:
+					user_info = client.users_info(user=user_id)
+					rebuilt.append(f"@{user_info["user"]["profile"]["display_name"]}")
+				except Exception:
+					rebuilt.append(f"@{user_id}")
+
+			if chan_id:
+				if chan_id not in channel_cache:
+					try:
+						channel_info = client.conversations_info(channel=chan_id)
+						channel_cache[chan_id] = channel_info["channel"]["name"]
+					except Exception:
+						channel_cache[chan_id] = f"[Channel {chan_id}]"
+				rebuilt.append(f"#{channel_cache[chan_id]}")
+
+		msg = "".join(rebuilt)
+		text += msg + ". "
+	return text
 
 def process_script(text, thread_ts):
 	print("turning to audio")
@@ -144,26 +181,7 @@ def handle_slop_mention(event, client, say):
 	messages, thread_ts, user_id = handle_mention(event, client, say)
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
-	text = ""
-	# Rewrite ALL of this absolute slop regex
-	for message in messages:
-		p = r'https?://\S+|www\.\S+'
-		n_url = str(re.sub(p, "", message["text"]))
-		# Matches <@U12345678> or <@U12345678|username> safely
-		parts = re.split(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>", n_url)
-		for i in range(0, len(parts)):
-			# Force an exact match so no trailing text passes through
-			if parts[i] and re.fullmatch(r"U[A-Z0-9]+", parts[i]):
-				try:
-					user_info = client.users_info(user=parts[i])
-					parts[i] = user_info["user"]["profile"]["display_name"]
-				except Exception:
-					# Prevents a crash if a user left the workspace or an ID is invalid
-					parts[i] = f"[User {parts[i]}]"
-
-		msg = "".join(parts)
-		text += msg + ". "
-
+	text = filter_script(client, messages)
 	name = process_script(text, thread_ts)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
@@ -186,7 +204,6 @@ def handle_slop_command(ack, say, command):
 		info_str = msg_info[1].split("&")
 		channel_id = info_str[1][4:]
 		thread_ts = info_str[0][10:]
-		print(channel_id, thread_ts)
 
 	elif len(msg_info) == 1:
 		info_str = msg_info[0].split("/")
@@ -206,25 +223,7 @@ def handle_slop_command(ack, say, command):
 									 f"{e}")
 		return
 
-	text = ""
-	for message in messages:
-		p = r'https?://\S+|www\.\S+'
-		n_url = str(re.sub(p, "", message["text"]))
-		# Matches <@U12345678> or <@U12345678|username> safely
-		parts = re.split(r"<@(U[A-Z0-9]+)(?:\|[^>]+)?>", n_url)
-		for i in range(0, len(parts)):
-			# Force an exact match so no trailing text passes through
-			if parts[i] and re.fullmatch(r"U[A-Z0-9]+", parts[i]):
-				try:
-					user_info = client.users_info(user=parts[i])
-					parts[i] = user_info["user"]["profile"]["display_name"]
-				except Exception:
-					# Prevents a crash if a user left the workspace or an ID is invalid
-					parts[i] = f"[User {parts[i]}]"
-
-		msg = "".join(parts)
-		text += msg + ". "
-
+	text = filter_script(client, messages)
 	name = process_script(text, thread_ts)
 
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
@@ -328,10 +327,8 @@ def handle_cat_gen_command(ack, say, command):
 	img = cv.imread(f"cat\\{onlyfiles[file_i]}")
 	img = cv.resize(img, (width, height))
 
-
-	lut = numpy.frombuffer(ASCII_COLOURMAP.encode(), dtype=numpy.uint8)
 	img_vals = frame_to_gs(img)
-	img = frame_to_ascii(img_vals, lut)
+	img = frame_to_ascii(img_vals, ASCII_COLOURMAP)
 	img_lst = []
 	for i in range(0, len(img), width):
 		img_lst.append((img[i:i + width]))
@@ -341,13 +338,13 @@ def handle_cat_gen_command(ack, say, command):
 	msg = ""
 	# Splits large messages into many small ones
 	try:
-		while i < len(img):
+		while i < len(img_lst):
 			length += width
 			if length > 3000:
 				say(text=f"```{msg}```")
 				msg = ""
 				length = 0
-			msg += "\n" + img[i]
+			msg += "\n" + img_lst[i]
 			i += 1
 		say(text=f"```{msg}```")
 
