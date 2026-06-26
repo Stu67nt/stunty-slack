@@ -23,7 +23,7 @@ To do:
 - Fix frame timings for bad apple (good enough)
 - Add subtitiles (It does exist)
 - Add multiple voice support
-- Add channel bot features which only work in #stunts-sanctuary
+- Add channel bot features which only work in #stunts-sanctuary (added welcome message)
 - Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads) (cant find one)
 - more cat photos (done)
 - fix channel id's not being read (done)
@@ -38,6 +38,30 @@ ASCII_COLOURMAP = numpy.frombuffer(" @%#*+=-:."[::-1].encode(), dtype=numpy.uint
 # Env shit
 load_dotenv()
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+
+########################################################################################################################
+# Channel Stuff
+########################################################################################################################
+@app.event("member_joined_channel")
+def handle_member_joined(event, client, logger):
+	user_id = event.get("user")
+	channel_id = event.get("channel")
+
+	try:
+		user_info = client.users_info(user=user_id)
+		display_name = user_info["user"]["profile"]["display_name"]
+
+		channel_info = client.conversations_info(channel=channel_id)
+		joined_channel_id = channel_info["channel"]["id"]
+		print(joined_channel_id)
+		if joined_channel_id == "C0ATDNYTBT7":
+			client.chat_postMessage(
+				channel=channel_id,
+				text=f"Haiii :haii: Welcome <@{user_id}> to my silly channel! Hope you have an amazing stay! :yay: <@U0A7QFF7X17> GET OVER HERE!"
+			)
+
+	except Exception as e:
+		logger.error(f"Error handling member_joined_channel: {e}")
 
 ########################################################################################################################
 # Slop generator
