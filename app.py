@@ -15,6 +15,7 @@ import moviepy
 import re
 import threading
 import fpstimer
+from srt_equalizer import srt_equalizer
 
 """
 To do: 
@@ -101,17 +102,20 @@ def handle_mention(event, client, say):
 # REMINDER TO SELF: async lets other functions run whilst this is happening
 # So whilst file is being saved other actions can happen with await
 async def speak(text, name="output"):
-	communicate = edge_tts.Communicate(text, boundary="WordBoundary")
+	communicate = edge_tts.Communicate(text, boundary="SentenceBoundary")
 	submaker = edge_tts.SubMaker()
 	with open(f"{name}.mp3", "wb") as file:
 		async for chunk in communicate.stream():
 			if chunk["type"] == "audio":
 				file.write(chunk["data"])
-			elif chunk["type"] == "WordBoundary":
+			elif chunk["type"] == "SentenceBoundary":
 				submaker.feed(chunk)
 
-	with open(f"{name}.srt", "w", encoding="utf-8") as file:
+	with open(f"{name}_long.srt", "w", encoding="utf-8") as file:
 		file.write(submaker.get_srt())
+
+	srt_equalizer.equalize_srt_file(f"{name}_long.srt", f"{name}.srt", 30)
+	os.remove(f"{name}_long.srt")
 
 def upload_video(client, user_id, file_path, thread_ts):
 	dm = client.conversations_open(users=user_id)
