@@ -42,6 +42,13 @@ app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 ########################################################################################################################
 # Channel Stuff
 ########################################################################################################################
+def get_valid_channel_ids(filepath):
+	with open(filepath, "r") as f:
+		lst = f.readlines()
+		for i in range(0, len(lst)):
+			lst[i] = lst[i].replace("\n", "")
+		return lst
+
 @app.event("member_joined_channel")
 def handle_member_joined(event, client, logger):
 	user_id = event.get("user")
@@ -53,8 +60,8 @@ def handle_member_joined(event, client, logger):
 
 		channel_info = client.conversations_info(channel=channel_id)
 		joined_channel_id = channel_info["channel"]["id"]
-		print(joined_channel_id)
-		if joined_channel_id == "C0ATDNYTBT7":
+		valid_channel_ids = get_valid_channel_ids("channel_welcome_ids.txt")
+		if joined_channel_id in valid_channel_ids:
 			client.chat_postMessage(
 				channel=channel_id,
 				text=f"Haiii :haii: Welcome <@{user_id}> to my silly channel! Hope you have an amazing stay! :yay: <@U0A7QFF7X17> GET OVER HERE!"
