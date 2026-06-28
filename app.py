@@ -16,6 +16,7 @@ import re
 import threading
 import fpstimer
 from srt_equalizer import srt_equalizer
+import json
 
 """
 To do: 
@@ -40,6 +41,93 @@ ASCII_COLOURMAP = numpy.frombuffer(" @%#*+=-:."[::-1].encode(), dtype=numpy.uint
 load_dotenv()
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 
+slopify_slack_block = [{
+			"type": "rich_text",
+			"elements": [
+				{
+					"type": "rich_text_section",
+					"elements": [
+						{
+							"type": "text",
+							"text": "Enter the parameters here!"
+						}
+					]
+				}
+			]
+		},
+		{
+			"type": "input",
+			"block_id": "thread_link",
+			"element": {
+				"type": "plain_text_input",
+				"action_id": "plain_text_input-action"
+			},
+			"label": {
+				"type": "plain_text",
+				"text": "Thread Link",
+				"emoji": False
+			},
+			"optional": False
+		},
+		{
+			"type": "input",
+			"block_id": "lang_iso_code",
+			"element": {
+				"type": "plain_text_input",
+				"action_id": "plain_text_input-action"
+			},
+			"label": {
+				"type": "plain_text",
+				"text": "Language (ISO Language Code)\t",
+				"emoji": False
+			},
+			"optional": True
+		},
+		{
+			"type": "input",
+			"block_id": "gender",
+			"element": {
+				"type": "static_select",
+				"placeholder": {
+					"type": "plain_text",
+					"text": "Select an item",
+					"emoji": False
+				},
+				"options": [
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "Man",
+							"emoji": False
+						},
+						"value": "Male"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "Woman",
+							"emoji": False
+						},
+						"value": "Female"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "I don't care",
+							"emoji": False
+						},
+						"value": "Both"
+					}
+				],
+				"action_id": "static_select-action"
+			},
+			"label": {
+				"type": "plain_text",
+				"text": "Voice Gender",
+				"emoji": False
+			},
+			"optional": True
+		}]
 ########################################################################################################################
 # Channel Stuff
 ########################################################################################################################
@@ -224,13 +312,34 @@ def determine_state(link_text):
 	return link_text.split("?")
 
 @app.command("/slopify")
-def handle_slop_command(ack, say, command):
-	print("Triggered")
+def open_slopify_menu(ack, body, command, client):
 	ack()
-	client = app.client
-
 	user_id = command["user_id"]
-	url = command.get("text")
+	client.views_open(
+		trigger_id=body["trigger_id"],
+		view={
+			"type": "modal",
+			"callback_id": "slopify_request",
+			"title": {"type": "plain_text", "text": "Enter Details"},
+			"submit": {"type": "plain_text", "text": "Submit"},
+			"blocks": slopify_slack_block,
+			"private_metadata": f"{user_id}"
+		}
+	)
+
+@app.view("slopify_request")
+def handle_slopify_response(ack, view):
+	ack()
+	thread_link = view["state"]["values"]["thread_link"]["plain_text_input-action"]["value"]
+	lang_iso_code = view["state"]["values"]["lang_iso_code"]["plain_text_input-action"]["value"]
+	gender = view["state"]["values"]["gender"]["static_select-action"]["selected_option"]
+	user_id = view['private_metadata']
+	create_slop(thread_link, lang_iso_code, gender, user_id)
+
+
+def create_slop(url, lang_iso_code, gender, user_id):
+	print("Triggered")
+	client = app.client
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
 
