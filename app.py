@@ -189,8 +189,19 @@ def handle_mention(event, client, say):
 
 # REMINDER TO SELF: async lets other functions run whilst this is happening
 # So whilst file is being saved other actions can happen with await
-async def speak(text, name="output"):
-	communicate = edge_tts.Communicate(text, boundary="SentenceBoundary")
+async def speak(text, lang = "en-GB", gender = "", name="output"):
+	voices = await edge_tts.VoicesManager.create()
+	print(gender)
+	if gender not in ("Male", "Female"):
+		gender = random.choice(["Male", "Female"])
+	voice_bank = voices.find(Gender=gender, Locale=lang)
+	print(voice_bank)
+	if voice_bank == []:
+		voice_bank = voices.find(Locale="en-GB")
+	model = random.choice(voice_bank)["Name"]
+	print(model)
+	communicate = edge_tts.Communicate(text, voice = model, boundary="SentenceBoundary")
+
 	submaker = edge_tts.SubMaker()
 	with open(f"{name}.mp3", "wb") as file:
 		async for chunk in communicate.stream():
@@ -270,10 +281,10 @@ def filter_script(client, messages):
 		text += msg + ". "
 	return text
 
-def process_script(text, thread_ts):
+def process_script(text, thread_ts, lang, gender):
 	print("turning to audio")
 	name = f"{thread_ts}{random.randint(1000, 9999)}"
-	asyncio.run(speak(text, name))
+	asyncio.run(speak(text=text, lang=lang, gender=gender, name=name))
 
 	print("turing to video")
 	audio_clip = AudioFileClip(f"{name}.mp3")
@@ -305,7 +316,7 @@ def handle_slop_mention(event, client, say):
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
 	text = filter_script(client, messages)
-	name = process_script(text, thread_ts)
+	name = process_script(text, thread_ts, lang="en-GB", gender="")
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
 def determine_state(link_text):
@@ -332,7 +343,7 @@ def handle_slopify_response(ack, view):
 	ack()
 	thread_link = view["state"]["values"]["thread_link"]["plain_text_input-action"]["value"]
 	lang_iso_code = view["state"]["values"]["lang_iso_code"]["plain_text_input-action"]["value"]
-	gender = view["state"]["values"]["gender"]["static_select-action"]["selected_option"]
+	gender = view["state"]["values"]["gender"]["static_select-action"]["selected_option"]["value"]
 	user_id = view['private_metadata']
 	create_slop(thread_link, lang_iso_code, gender, user_id)
 
@@ -340,24 +351,26 @@ def handle_slopify_response(ack, view):
 def create_slop(url, lang_iso_code, gender, user_id):
 	print("Triggered")
 	client = app.client
-	client.chat_postMessage(channel=user_id,
-							text="generating your video be patient as it can take a while")
+	try:
+		msg_info = determine_state(url)
+		if len(msg_info) == 2:
+			info_str = msg_info[1].split("&")
+			channel_id = info_str[1][4:]
+			thread_ts = info_str[0][10:]
 
-	msg_info = determine_state(url)
-	if len(msg_info) == 2:
-		info_str = msg_info[1].split("&")
-		channel_id = info_str[1][4:]
-		thread_ts = info_str[0][10:]
+		elif len(msg_info) == 1:
+			info_str = msg_info[0].split("/")
+			channel_id = info_str[-2]
+			unfiltered_thread_ts = info_str[-1][1:]
+			thread_ts = f"{unfiltered_thread_ts[:-6]}.{unfiltered_thread_ts[-6:]}"
 
-	elif len(msg_info) == 1:
-		info_str = msg_info[0].split("/")
-		channel_id = info_str[-2]
-		unfiltered_thread_ts = info_str[-1][1:]
-		thread_ts = f"{unfiltered_thread_ts[:-6]}.{unfiltered_thread_ts[-6:]}"
-
-	else:
-		channel_id = None
-		thread_ts = None
+		else:
+			channel_id = None
+			thread_ts = None
+	except Exception as e:
+		client.chat_postMessage(channel=user_id,
+								text=f"Error occured trying to process the request. Most likely invalid URL.")
+		return
 	try:
 		result = client.conversations_replies(channel=channel_id, ts=thread_ts)
 		messages = result.get("messages", [])
@@ -367,9 +380,12 @@ def create_slop(url, lang_iso_code, gender, user_id):
 									 f"{e}")
 		return
 
-	text = filter_script(client, messages)
-	name = process_script(text, thread_ts)
+	# Messages found so sending confirmation
+	client.chat_postMessage(channel=user_id,
+							text="generating your video be patient as it can take a while")
 
+	text = filter_script(client, messages)
+	name = process_script(text, thread_ts, lang_iso_code, gender)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
 ########################################################################################################################
