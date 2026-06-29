@@ -9,7 +9,7 @@ import cv2 as cv
 from decord import VideoReader, cpu
 import edge_tts
 import asyncio
-from moviepy import VideoFileClip, vfx, AudioFileClip, CompositeVideoClip, TextClip
+from moviepy import VideoFileClip, vfx, AudioFileClip, CompositeVideoClip, TextClip, ColorClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 import moviepy
 import re
@@ -339,7 +339,7 @@ def filter_script(client, messages, locale, accent_only):
 		text += msg + ". "
 	return text
 
-def process_script(text, thread_ts, lang, gender):
+def process_script(text, thread_ts, lang, gender, credit_names):
 	print("turning to audio")
 	name = f"{thread_ts}{random.randint(1000, 9999)}"
 	asyncio.run(speak(text=text, lang=lang, gender=gender, name=name))
@@ -355,14 +355,14 @@ def process_script(text, thread_ts, lang, gender):
 		VideoFileClip(f"{mypath}/{onlyfiles[file_i]}")
 		.with_volume_scaled(0)
 	).with_effects([vfx.Loop(duration=audio_clip.duration)])
-
 	video_clip.audio = audio_clip.subclipped(0, video_clip.duration)
 
 	generator = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='caption', size=(video_clip.w, int(video_clip.h/5)))
 	subtitles = SubtitlesClip(f'{name}.srt', make_textclip=generator)
 
 
-	video_clip = CompositeVideoClip((video_clip, subtitles))
+	video_clip = CompositeVideoClip((video_clip, subtitles)).with_effects([vfx.FadeOut(duration=2)])
+	print(credit_names)
 	video_clip.write_videofile(f"{name}.mp4")
 	os.remove(f"{name}.mp3")
 	os.remove(f"{name}.srt")
@@ -461,6 +461,17 @@ def create_slop(url, lang_iso_code, gender, accent_only, user_id):
 	try:
 		result = client.conversations_replies(channel=channel_id, ts=thread_ts)
 		messages = result.get("messages", [])
+		user_ids = result["messages"][0]["reply_users"]
+		user_display_names = []
+
+		for replies_user_id in user_ids:
+			user_info = client.users_info(user=replies_user_id)
+			user_display_names.append(user_info["user"]["profile"]["display_name"])
+
+		original_poster = client.users_info(user=messages[0]['user'])["user"]["profile"]["display_name"]
+		if original_poster not in user_display_names:
+			user_display_names.append(original_poster)
+
 	except Exception as e:
 		client.chat_postMessage(channel=user_id,
 								text=f"I'm to lazy to create actual error messages so here is what slack said went wrong.\n"
@@ -472,7 +483,7 @@ def create_slop(url, lang_iso_code, gender, accent_only, user_id):
 							text="generating your video be patient as it can take a while")
 
 	text = filter_script(client, messages, lang_iso_code, accent_only)
-	name = process_script(text, thread_ts, lang_iso_code, gender)
+	name = process_script(text, thread_ts, lang_iso_code, gender, user_display_names)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
 ########################################################################################################################
