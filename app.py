@@ -17,6 +17,8 @@ import threading
 import fpstimer
 from srt_equalizer import srt_equalizer
 import json
+import translators as ts
+import asyncio
 
 """
 To do: 
@@ -60,7 +62,11 @@ slopify_slack_block = [{
 			"block_id": "thread_link",
 			"element": {
 				"type": "plain_text_input",
-				"action_id": "plain_text_input-action"
+				"action_id": "plain_text_input-action",
+				"placeholder": {
+					"type": "plain_text",
+					"text": "https://hackclub.slack.com/archives/C0AUZ1LAMH6/p1782671062500399"
+				}
 			},
 			"label": {
 				"type": "plain_text",
@@ -74,11 +80,47 @@ slopify_slack_block = [{
 			"block_id": "lang_iso_code",
 			"element": {
 				"type": "plain_text_input",
-				"action_id": "plain_text_input-action"
+				"action_id": "plain_text_input-action",
+				"placeholder": {
+					"type": "plain_text",
+					"text": "en-GB"
+				}
 			},
 			"label": {
 				"type": "plain_text",
-				"text": "Language (ISO Language Code)\t",
+				"text": "Language (Edge-tts locale codes)\t",
+				"emoji": False
+			},
+			"optional": True
+		},
+		{
+			"type": "input",
+			"block_id": "accent_only",
+			"element": {
+				"type": "radio_buttons",
+				"options": [
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "Yes",
+							"emoji": False
+						},
+						"value": "True"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "No",
+							"emoji": False
+						},
+						"value": "False"
+					}
+				],
+				"action_id": "radio_buttons-action"
+			},
+			"label": {
+				"type": "plain_text",
+				"text": "Don't Translate? (Aka just an accent reading English)",
 				"emoji": False
 			},
 			"optional": True
@@ -127,7 +169,8 @@ slopify_slack_block = [{
 				"emoji": False
 			},
 			"optional": True
-		}]
+		}
+]
 ########################################################################################################################
 # Channel Stuff
 ########################################################################################################################
@@ -191,11 +234,9 @@ def handle_mention(event, client, say):
 # So whilst file is being saved other actions can happen with await
 async def speak(text, lang = "en-GB", gender = "", name="output"):
 	voices = await edge_tts.VoicesManager.create()
-	print(gender)
 	if gender not in ("Male", "Female"):
 		gender = random.choice(["Male", "Female"])
 	voice_bank = voices.find(Gender=gender, Locale=lang)
-	print(voice_bank)
 	if voice_bank == []:
 		voice_bank = voices.find(Locale="en-GB")
 	model = random.choice(voice_bank)["Name"]
@@ -237,10 +278,11 @@ def upload_video(client, user_id, file_path, thread_ts):
 		return
 	os.remove(file_path)
 
-def filter_script(client, messages):
+def filter_script(client, messages, locale, accent_only):
 	text = ""
 	channel_cache = {}
-
+	trans_lang = locale.split("-")[0]
+	print("Filtering script")
 	for message in messages:
 		p = r'https?://\S+|www\.\S+'
 		n_url = str(re.sub(p, "", message["text"]))
@@ -278,6 +320,22 @@ def filter_script(client, messages):
 				rebuilt.append(f"#{channel_cache[chan_id]}")
 
 		msg = "".join(rebuilt)
+		if not accent_only or trans_lang == "en":
+			if len(msg) > 5000:
+				split_msg = msg.split(" ")
+				smaller_msg = ""
+				i = 0
+				while i < len(split_msg):
+					word = split_msg[i]
+					if len(smaller_msg + word) < 5000:
+						smaller_msg += word
+					else:
+						text += ts.translate_text(msg, to_language=trans_lang, translator="google") + ". "
+					i += 1
+				# Translating any remaining text
+				text += ts.translate_text(msg, to_language=trans_lang, translator="google") + ". "
+			else:
+				msg = ts.translate_text(msg, to_language=trans_lang, translator="google")
 		text += msg + ". "
 	return text
 
@@ -315,7 +373,7 @@ def handle_slop_mention(event, client, say):
 	messages, thread_ts, user_id = handle_mention(event, client, say)
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
-	text = filter_script(client, messages)
+	text = filter_script(client, messages, locale="en-GB", accent_only=True)
 	name = process_script(text, thread_ts, lang="en-GB", gender="")
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
@@ -341,15 +399,44 @@ def open_slopify_menu(ack, body, command, client):
 @app.view("slopify_request")
 def handle_slopify_response(ack, view):
 	ack()
-	thread_link = view["state"]["values"]["thread_link"]["plain_text_input-action"]["value"]
-	lang_iso_code = view["state"]["values"]["lang_iso_code"]["plain_text_input-action"]["value"]
-	gender = view["state"]["values"]["gender"]["static_select-action"]["selected_option"]["value"]
+	client = app.client
 	user_id = view['private_metadata']
-	create_slop(thread_link, lang_iso_code, gender, user_id)
+	thread_link = view["state"]["values"]["thread_link"]["plain_text_input-action"]["value"]
+
+	# Validating iso_code
+	if view["state"]["values"]["lang_iso_code"]["plain_text_input-action"]["value"] != None:
+		lang_iso_code = view["state"]["values"]["lang_iso_code"]["plain_text_input-action"]["value"]
+		voices = asyncio.run(edge_tts.VoicesManager.create())
+		voice_bank = voices.find(Locale=lang_iso_code)
+		if voice_bank == []:
+			client.chat_postMessage(channel=user_id,
+									text=f"Invalid language code so using en-GB.")
+			lang_iso_code = "en-GB"
+	else:
+		lang_iso_code = "en-GB"
+
+	# Getting gender
+	if view["state"]["values"]["gender"]["static_select-action"]["selected_option"] != None:
+		gender = view["state"]["values"]["gender"]["static_select-action"]["selected_option"]["value"]
+	else:
+		gender = ""
+
+	if view["state"]["values"]["accent_only"]["radio_buttons-action"]["selected_option"] != None:
+		accent_only = view["state"]["values"]["accent_only"]["radio_buttons-action"]["selected_option"]["value"]
+	else:
+		accent_only = "False"
+
+	if accent_only == "True":
+		accent_only = True
+	else:
+		accent_only = False
+	create_slop(thread_link, lang_iso_code, gender, accent_only, user_id)
 
 
-def create_slop(url, lang_iso_code, gender, user_id):
+def create_slop(url, lang_iso_code, gender, accent_only, user_id):
 	print("Triggered")
+	print(lang_iso_code)
+	print(gender)
 	client = app.client
 	try:
 		msg_info = determine_state(url)
@@ -384,7 +471,7 @@ def create_slop(url, lang_iso_code, gender, user_id):
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
 
-	text = filter_script(client, messages)
+	text = filter_script(client, messages, lang_iso_code, accent_only)
 	name = process_script(text, thread_ts, lang_iso_code, gender)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
