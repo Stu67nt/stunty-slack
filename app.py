@@ -613,7 +613,7 @@ def handle_cat_gen_command(ack, say, command):
 			onlyfiles.append(file)
 
 	file_i = random.randint(0, len(onlyfiles) - 1)
-	img = cv.imread(f"cat\\{onlyfiles[file_i]}")
+	img = cv.imread(os.path.join(mypath,onlyfiles[file_i]))
 	img = cv.resize(img, (width, height))
 
 	img_vals = frame_to_gs(img)
