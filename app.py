@@ -393,7 +393,7 @@ def process_script(text, thread_ts, lang, gender, credit_names):
 	credits_audio = AudioFileClip(f"credits.mp3").with_effects([afx.AudioLoop(duration=black_screen.duration), afx.AudioFadeIn(duration=2)])
 	black_screen = black_screen.with_audio(credits_audio)
 
-	credits_font = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='label', size=(video_clip.w, video_clip.h))
+	credits_font = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='caption',text_align="center", size=(video_clip.w, video_clip.h))
 	credit_text = "Credits:\n"
 	for i in range(0, len(credit_names)):
 		credit_text += credit_names[i]+"\n"
