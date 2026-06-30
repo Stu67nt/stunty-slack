@@ -9,7 +9,7 @@ import cv2 as cv
 from decord import VideoReader, cpu
 import edge_tts
 import asyncio
-from moviepy import VideoFileClip, vfx, AudioFileClip, CompositeVideoClip, TextClip, ColorClip
+from moviepy import VideoFileClip, vfx, afx, AudioFileClip, CompositeVideoClip, TextClip, ColorClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 import moviepy
 import re
@@ -19,6 +19,7 @@ from srt_equalizer import srt_equalizer
 import json
 import translators as ts
 import asyncio
+from math import ceil
 
 """
 To do: 
@@ -230,6 +231,27 @@ def handle_mention(event, client, say):
 
 	return None
 
+def find_messages_and_users(channel_id, thread_ts):
+	client = app.client
+
+	result = client.conversations_replies(channel=channel_id, ts=thread_ts)
+	messages = result.get("messages", [])
+	user_ids = result["messages"][0]["reply_users"]
+	user_display_names = []
+
+	for replies_user_id in user_ids:
+		user_info = client.users_info(user=replies_user_id)
+		user_display_names.append(user_info["user"]["profile"]["display_name"])
+
+	original_poster = client.users_info(user=messages[0]['user'])["user"]["profile"]["display_name"]
+	if original_poster not in user_display_names:
+		user_display_names.append(original_poster)
+
+	return messages, user_display_names
+
+def calc_credits_duration(credit_names):
+	return ceil(len(credit_names)/3)*5
+
 # REMINDER TO SELF: async lets other functions run whilst this is happening
 # So whilst file is being saved other actions can happen with await
 async def speak(text, lang = "en-GB", gender = "", name="output"):
@@ -351,23 +373,42 @@ def process_script(text, thread_ts, lang, gender, credit_names):
 	onlyfiles = [f for f in os.listdir(mypath) if os.path.isfile(os.path.join(mypath, f))]
 	file_i = random.randint(0, len(onlyfiles) - 1)
 
-	video_clip = (
-		VideoFileClip(f"{mypath}/{onlyfiles[file_i]}")
-		.with_volume_scaled(0)
-	).with_effects([vfx.Loop(duration=audio_clip.duration)])
+	video_clip = (VideoFileClip(f"{mypath}/{onlyfiles[file_i]}").with_volume_scaled(0)).with_effects([vfx.Loop(duration=audio_clip.duration)])
 	video_clip.audio = audio_clip.subclipped(0, video_clip.duration)
 
-	generator = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='caption', size=(video_clip.w, int(video_clip.h/5)))
-	subtitles = SubtitlesClip(f'{name}.srt', make_textclip=generator)
+	subtitles_font = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='caption', size=(video_clip.w, int(video_clip.h/5)))
+	subtitles = SubtitlesClip(f'{name}.srt', make_textclip=subtitles_font)
 
 
 	video_clip = CompositeVideoClip((video_clip, subtitles)).with_effects([vfx.FadeOut(duration=2)])
+
+	black_screen = ColorClip(size=video_clip.size, color=(0, 0, 0), duration=calc_credits_duration(credit_names))
+	credits_audio = AudioFileClip(f"credits.mp3").with_effects([afx.AudioLoop(duration=black_screen.duration), afx.AudioFadeIn(duration=2)])
+	black_screen = black_screen.with_audio(credits_audio)
+
+	credits_font = lambda txt: TextClip(text = txt, font="arial.ttf", font_size=24, color="white", method='label', size=(video_clip.w, video_clip.h))
+	credit_text = "Credits:\n"
+	for i in range(0, len(credit_names)):
+		credit_text += credit_names[i]+"\n"
+		print(credit_text)
+		if (i+1) % 3 == 0:
+			txt_clip = credits_font(credit_text).with_duration(duration=5).with_start(t=(i//3)*5).with_position("center")
+			black_screen = CompositeVideoClip((black_screen, txt_clip))
+			credit_text = ""
+
+	# Left over text
+	txt_clip = credits_font(credit_text).with_duration(duration=5).with_start(t=black_screen.duration-5).with_position("center")
+	black_screen = CompositeVideoClip((black_screen, txt_clip))
+
+	final_clip = moviepy.concatenate_videoclips((video_clip, black_screen))
+
 	print(credit_names)
-	video_clip.write_videofile(f"{name}.mp4")
+	final_clip.write_videofile(f"{name}.mp4")
 	os.remove(f"{name}.mp3")
 	os.remove(f"{name}.srt")
 	return name
 
+# Todo Update stunty ping to match slopify
 @app.event("app_mention")
 def handle_slop_mention(event, client, say):
 	messages, thread_ts, user_id = handle_mention(event, client, say)
@@ -458,30 +499,12 @@ def create_slop(url, lang_iso_code, gender, accent_only, user_id):
 		client.chat_postMessage(channel=user_id,
 								text=f"Error occured trying to process the request. Most likely invalid URL.")
 		return
-	try:
-		result = client.conversations_replies(channel=channel_id, ts=thread_ts)
-		messages = result.get("messages", [])
-		user_ids = result["messages"][0]["reply_users"]
-		user_display_names = []
-
-		for replies_user_id in user_ids:
-			user_info = client.users_info(user=replies_user_id)
-			user_display_names.append(user_info["user"]["profile"]["display_name"])
-
-		original_poster = client.users_info(user=messages[0]['user'])["user"]["profile"]["display_name"]
-		if original_poster not in user_display_names:
-			user_display_names.append(original_poster)
-
-	except Exception as e:
-		client.chat_postMessage(channel=user_id,
-								text=f"I'm to lazy to create actual error messages so here is what slack said went wrong.\n"
-									 f"{e}")
-		return
 
 	# Messages found so sending confirmation
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
 
+	messages, user_display_names = find_messages_and_users(channel_id, thread_ts)
 	text = filter_script(client, messages, lang_iso_code, accent_only)
 	name = process_script(text, thread_ts, lang_iso_code, gender, user_display_names)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
