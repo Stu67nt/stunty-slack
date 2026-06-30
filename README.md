@@ -17,6 +17,9 @@ To generate a cat image, run /generatecat for it to run in 80x24 resolution.
 To customise the resolution, add the extra arguments [width] [height] to the end. This command works for any resolution, but to be able to properly see larger resolution images, you may need to 
 zoom out (on Slack web) or have a big monitor.
 
+#### Welcomer
+Welcomes people to the channels listed in the channel ID and pings me (stunt) when they join.
+
 #### Generate slop
 To generate slop videos of a thread, either ping @stunty and say slopify like "@stunty pls slopify this thread" WITHIN THE THREAD or in a main channel, run the command /slopify. A menu will pop up where you can paste in the thread URL which you want to slopify. All other arguments are optional; however, they are explained below. If the bot is not in the channel where the thread you want to slopify is, it will not work and return an error message. Make sure to add it to the channel where the thread you want to slopify is first.
 
