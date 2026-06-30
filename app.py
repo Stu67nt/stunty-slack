@@ -26,8 +26,8 @@ To do:
 - Some links make it so bot does not read whole thread. (done)
 - Get out of opencv hell as it is slow as shit. (Done but need to test on a server)
 - Fix frame timings for bad apple (good enough)
-- Add subtitiles (It does exist)
-- Add multiple voice support
+- Add subtitiles (Done)
+- Add multiple voice support (done)
 - Add channel bot features which only work in #stunts-sanctuary (added welcome message)
 - Upload slop videos via hack club cdn? (to solve timeout issue with large file uploads) (cant find one)
 - more cat photos (done)
@@ -217,7 +217,7 @@ def handle_mention(event, client, say):
 		# Getting all thread contents
 		result = client.conversations_replies(channel=channel_id, ts=thread_ts)
 		messages = result.get("messages", [])
-		return messages, thread_ts, user_id
+		return thread_ts, user_id, channel_id
 	# If pinged to slopify outside of a thread.
 	elif "slopify" in event["text"].split() and not thread_ts:
 		client.chat_postEphemeral(
@@ -240,10 +240,17 @@ def find_messages_and_users(channel_id, thread_ts):
 	user_display_names = []
 
 	for replies_user_id in user_ids:
-		user_info = client.users_info(user=replies_user_id)
-		user_display_names.append(user_info["user"]["profile"]["display_name"])
+		try:
+			user_info = client.users_info(user=replies_user_id)
+			user_display_names.append(user_info["user"]["profile"]["display_name"])
+		except:
+			user_display_names.append(replies_user_id)
 
-	original_poster = client.users_info(user=messages[0]['user'])["user"]["profile"]["display_name"]
+	try:
+		original_poster = client.users_info(user=messages[0]['user'])["user"]["profile"]["display_name"]
+	except:
+		original_poster = messages[0]['user']
+
 	if original_poster not in user_display_names:
 		user_display_names.append(original_poster)
 
@@ -411,11 +418,12 @@ def process_script(text, thread_ts, lang, gender, credit_names):
 # Todo Update stunty ping to match slopify
 @app.event("app_mention")
 def handle_slop_mention(event, client, say):
-	messages, thread_ts, user_id = handle_mention(event, client, say)
+	thread_ts, user_id, channel_id = handle_mention(event, client, say)
+	messages, user_display_names = find_messages_and_users(channel_id, thread_ts)
 	client.chat_postMessage(channel=user_id,
 							text="generating your video be patient as it can take a while")
 	text = filter_script(client, messages, locale="en-GB", accent_only=True)
-	name = process_script(text, thread_ts, lang="en-GB", gender="")
+	name = process_script(text, thread_ts, lang="en-GB", gender="", credit_names=user_display_names)
 	threading.Thread(target=upload_video, args=(client, user_id, f"{name}.mp4", thread_ts)).start()
 
 def determine_state(link_text):
